@@ -1,0 +1,1134 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+.remember/
+  tmp/
+    save-session.pid
+app/
+  api/
+    network-info/
+      route.ts
+    stream/
+      route.ts
+    translate/
+      route.ts
+  broadcast/
+    page.tsx
+  listen/
+    page.tsx
+  favicon.ico
+  globals.css
+  layout.tsx
+  manifest.ts
+  page.tsx
+lib/
+  broadcast-store.ts
+public/
+  file.svg
+  globe.svg
+  next.svg
+  vercel.svg
+  window.svg
+.gitignore
+AGENTS.md
+CLAUDE.md
+eslint.config.mjs
+next.config.ts
+package.json
+postcss.config.mjs
+README.md
+tsconfig.json
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path=".remember/tmp/save-session.pid">
+35978
+</file>
+
+<file path="app/api/network-info/route.ts">
+import { networkInterfaces } from "os";
+
+// Returns the server's local network IP so the QR code can use it
+// instead of "localhost" (which phones can't reach).
+export async function GET() {
+  const nets = networkInterfaces();
+  let localIp = "localhost";
+
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name] ?? []) {
+      // Skip loopback and non-IPv4
+      if (net.family === "IPv4" && !net.internal) {
+        localIp = net.address;
+        break;
+      }
+    }
+    if (localIp !== "localhost") break;
+  }
+
+  return Response.json({ ip: localIp, port: 3000 });
+}
+</file>
+
+<file path="app/api/stream/route.ts">
+import { broadcastStore } from "@/lib/broadcast-store";
+
+export const maxDuration = 300;
+export const dynamic = "force-dynamic";
+
+// SSE endpoint — attendees connect here to receive live Ukrainian captions.
+export async function GET() {
+  const encoder = new TextEncoder();
+
+  let heartbeat: ReturnType<typeof setInterval>;
+  let handler: (text: string) => void;
+
+  const stream = new ReadableStream({
+    start(controller) {
+      // Send a keep-alive comment immediately so the browser knows it's connected
+      controller.enqueue(encoder.encode(": connected\n\n"));
+
+      handler = (text: string) => {
+        try {
+          const payload = JSON.stringify({ text, ts: Date.now() });
+          controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
+        } catch {
+          // Client disconnected — clean up
+          cleanup();
+        }
+      };
+
+      broadcastStore.subscribe(handler);
+
+      // Heartbeat every 15s to prevent proxy/browser timeouts
+      heartbeat = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(": ping\n\n"));
+        } catch {
+          cleanup();
+        }
+      }, 15_000);
+    },
+    cancel() {
+      // Called when the client disconnects
+      cleanup();
+    },
+  });
+
+  function cleanup() {
+    clearInterval(heartbeat);
+    if (handler) broadcastStore.unsubscribe(handler);
+  }
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
+}
+</file>
+
+<file path="app/api/translate/route.ts">
+import { generateText } from "ai";
+import { anthropic } from "@ai-sdk/anthropic";
+import { broadcastStore } from "@/lib/broadcast-store";
+import { NextRequest } from "next/server";
+
+export async function POST(req: NextRequest) {
+  const { text } = await req.json();
+
+  if (!text?.trim()) {
+    return Response.json({ error: "No text provided" }, { status: 400 });
+  }
+
+  try {
+    const { text: translated } = await generateText({
+      // Uses ANTHROPIC_API_KEY from .env.local.
+      // Claude Haiku is fast and cheap — perfect for real-time translation.
+      model: anthropic("claude-haiku-4-5-20251001"),
+      system:
+        "You are a real-time church sermon translator. " +
+        "Translate the given English text to Ukrainian accurately and naturally. " +
+        "Preserve the tone — formal, respectful, and faithful to Christian preaching style. " +
+        "Return ONLY the translated text, nothing else.",
+      prompt: text,
+    });
+
+    // Push to all connected attendees via SSE
+    broadcastStore.broadcast(translated);
+
+    return Response.json({ translated });
+  } catch (error) {
+    console.error("[translate]", error);
+    return Response.json({ error: "Translation failed" }, { status: 500 });
+  }
+}
+</file>
+
+<file path="app/broadcast/page.tsx">
+"use client";
+
+import { useState, useEffect, useRef, useCallback } from "react";
+import { QRCodeCanvas } from "qrcode.react";
+import Link from "next/link";
+
+type Status = "idle" | "listening" | "translating" | "error";
+
+export default function BroadcastPage() {
+  const [status, setStatus] = useState<Status>("idle");
+  const [interimText, setInterimText] = useState("");
+  const [lastEnglish, setLastEnglish] = useState("");
+  const [lastUkrainian, setLastUkrainian] = useState("");
+  const [listenUrl, setListenUrl] = useState("");
+  const [errorMsg, setErrorMsg] = useState("");
+  const [sentenceCount, setSentenceCount] = useState(0);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const isActiveRef = useRef(false);
+
+  useEffect(() => {
+    fetch("/api/network-info")
+      .then((res) => res.json())
+      .then(({ ip, port }) => {
+        setListenUrl(`http://${ip}:${port}/listen`);
+      })
+      .catch(() => {
+        setListenUrl(`${window.location.origin}/listen`);
+      });
+  }, []);
+
+  const requestWakeLock = useCallback(async () => {
+    try {
+      if ("wakeLock" in navigator) {
+        wakeLockRef.current = await navigator.wakeLock.request("screen");
+      }
+    } catch {
+      // Not critical
+    }
+  }, []);
+
+  const releaseWakeLock = useCallback(() => {
+    wakeLockRef.current?.release();
+    wakeLockRef.current = null;
+  }, []);
+
+  const sendForTranslation = useCallback(async (text: string) => {
+    if (!text.trim()) return;
+    setLastEnglish(text);
+    setInterimText("");
+    setStatus("translating");
+
+    try {
+      const res = await fetch("/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const data = await res.json();
+      if (data.translated) {
+        setLastUkrainian(data.translated);
+        setSentenceCount((c) => c + 1);
+      }
+    } catch {
+      setErrorMsg("Translation failed. Check your API key.");
+    } finally {
+      if (isActiveRef.current) setStatus("listening");
+    }
+  }, []);
+
+  const startBroadcast = useCallback(() => {
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      setErrorMsg("Speech recognition not supported. Use Chrome or Edge.");
+      setStatus("error");
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = "en-US";
+    recognition.continuous = true;
+    recognition.interimResults = true;
+
+    recognition.onresult = (event) => {
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript.trim();
+        if (event.results[i].isFinal) {
+          setInterimText("");
+          if (transcript) sendForTranslation(transcript);
+        } else {
+          // Show live interim text so the preacher sees it's hearing them
+          setInterimText(transcript);
+        }
+      }
+    };
+
+    recognition.onerror = (event) => {
+      if (event.error === "no-speech") return;
+      setErrorMsg(`Microphone error: ${event.error}`);
+      setStatus("error");
+    };
+
+    recognition.onend = () => {
+      if (isActiveRef.current) recognition.start();
+    };
+
+    recognitionRef.current = recognition;
+    isActiveRef.current = true;
+    recognition.start();
+    requestWakeLock();
+    setStatus("listening");
+    setSentenceCount(0);
+    setErrorMsg("");
+  }, [sendForTranslation, requestWakeLock]);
+
+  const stopBroadcast = useCallback(() => {
+    isActiveRef.current = false;
+    recognitionRef.current?.stop();
+    releaseWakeLock();
+    setStatus("idle");
+    setInterimText("");
+  }, [releaseWakeLock]);
+
+  const isLive = status === "listening" || status === "translating";
+
+  // ── IDLE: Setup screen with QR code ──
+  if (!isLive && status !== "error") {
+    return (
+      <main className="min-h-screen bg-gray-950 text-white flex flex-col items-center justify-center p-6">
+        <div className="max-w-sm w-full space-y-8 text-center">
+          <Link href="/" className="text-gray-500 hover:text-white text-sm transition-colors">
+            ← Back
+          </Link>
+
+          <div className="space-y-3">
+            <h1 className="text-3xl font-bold tracking-tight">🎙️ Preach</h1>
+            <p className="text-gray-400 text-sm leading-relaxed">
+              Show the QR code to the congregation,<br />
+              then tap start and preach normally.
+            </p>
+          </div>
+
+          {listenUrl && (
+            <div className="bg-white rounded-2xl p-6 flex flex-col items-center gap-4 shadow-2xl shadow-blue-500/10">
+              <QRCodeCanvas value={listenUrl} size={200} level="M" />
+              <div className="text-center">
+                <p className="text-gray-800 text-xs font-medium">
+                  Scan to follow in Ukrainian
+                </p>
+                <p className="text-gray-400 text-[10px] font-mono mt-1">
+                  {listenUrl}
+                </p>
+              </div>
+            </div>
+          )}
+
+          <button
+            onClick={startBroadcast}
+            className="w-full py-5 rounded-2xl bg-blue-600 hover:bg-blue-500 active:bg-blue-700 font-semibold text-xl transition-all shadow-lg shadow-blue-600/20"
+          >
+            Start Sermon
+          </button>
+
+          {sentenceCount > 0 && (
+            <p className="text-gray-500 text-xs">
+              Last session: {sentenceCount} sentences translated
+            </p>
+          )}
+        </div>
+      </main>
+    );
+  }
+
+  // ── ERROR: Show error with retry ──
+  if (status === "error") {
+    return (
+      <main className="min-h-screen bg-gray-950 text-white flex flex-col items-center justify-center p-6">
+        <div className="max-w-sm w-full space-y-6 text-center">
+          <div className="w-20 h-20 rounded-full bg-red-900/30 flex items-center justify-center text-4xl mx-auto">
+            ⚠️
+          </div>
+          <p className="text-red-400 text-sm">{errorMsg}</p>
+          <button
+            onClick={startBroadcast}
+            className="w-full py-4 rounded-2xl bg-blue-600 hover:bg-blue-500 font-semibold text-lg transition-colors"
+          >
+            Try Again
+          </button>
+        </div>
+      </main>
+    );
+  }
+
+  // ── LIVE: Minimal zen screen ──
+  return (
+    <main className="min-h-screen bg-gray-950 text-white flex flex-col items-center justify-center p-6">
+      <div className="max-w-sm w-full space-y-8 text-center">
+        {/* Pulsing indicator */}
+        <div className="flex flex-col items-center gap-5">
+          <div className="relative">
+            <div
+              className={`w-28 h-28 rounded-full flex items-center justify-center text-5xl transition-colors duration-500 ${
+                status === "listening"
+                  ? "bg-green-900/40"
+                  : "bg-yellow-900/40"
+              }`}
+            >
+              {status === "listening" ? "🎙️" : "🔄"}
+            </div>
+            {status === "listening" && (
+              <div className="absolute inset-0 w-28 h-28 rounded-full bg-green-500/20 animate-ping" />
+            )}
+          </div>
+
+          <div>
+            <p className="text-xl font-semibold tracking-tight">
+              {status === "listening" ? "Listening…" : "Translating…"}
+            </p>
+            <p className="text-gray-500 text-sm mt-1 tabular-nums">
+              {sentenceCount} sentence{sentenceCount !== 1 ? "s" : ""} sent
+            </p>
+          </div>
+        </div>
+
+        {/* Live interim text — shows what's being heard right now */}
+        {interimText && (
+          <div className="bg-gray-900/30 rounded-xl px-4 py-3 border border-gray-800/50">
+            <p className="text-xs text-gray-500 mb-1">Hearing…</p>
+            <p className="text-sm text-gray-300 italic">{interimText}</p>
+          </div>
+        )}
+
+        {/* Last translated line */}
+        {lastUkrainian && !interimText && (
+          <div className="bg-gray-900/30 rounded-xl px-4 py-3 border border-gray-800/50">
+            <p className="text-xs text-gray-500 mb-1">Last sent</p>
+            <p className="text-xs text-gray-400 mb-2">{lastEnglish}</p>
+            <p className="text-sm text-blue-300">{lastUkrainian}</p>
+          </div>
+        )}
+
+        {errorMsg && (
+          <p className="text-red-400 text-sm bg-red-950/50 rounded-xl p-3">
+            {errorMsg}
+          </p>
+        )}
+
+        <button
+          onClick={stopBroadcast}
+          className="w-full py-4 rounded-2xl bg-gray-800/50 hover:bg-red-600 font-semibold transition-all text-gray-500 hover:text-white border border-gray-800/50 hover:border-red-600"
+        >
+          End Sermon
+        </button>
+      </div>
+    </main>
+  );
+}
+</file>
+
+<file path="app/listen/page.tsx">
+"use client";
+
+import { useState, useEffect, useRef, useCallback } from "react";
+import Link from "next/link";
+
+type Caption = { text: string; ts: number };
+
+export default function ListenPage() {
+  const [captions, setCaptions] = useState<Caption[]>([]);
+  const [connected, setConnected] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+
+  // Keep attendee's phone awake during the service
+  const requestWakeLock = useCallback(async () => {
+    try {
+      if ("wakeLock" in navigator) {
+        wakeLockRef.current = await navigator.wakeLock.request("screen");
+      }
+    } catch {
+      // Not critical
+    }
+  }, []);
+
+  useEffect(() => {
+    requestWakeLock();
+
+    const es = new EventSource("/api/stream");
+
+    es.onopen = () => setConnected(true);
+
+    es.onmessage = (event) => {
+      try {
+        const { text, ts } = JSON.parse(event.data);
+        setCaptions((prev) => [...prev.slice(-99), { text, ts }]);
+      } catch {
+        // ignore
+      }
+    };
+
+    es.onerror = () => {
+      setConnected(false);
+    };
+
+    return () => {
+      es.close();
+      wakeLockRef.current?.release();
+    };
+  }, [requestWakeLock]);
+
+  // Auto-scroll to latest caption
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [captions]);
+
+  const latestCaption = captions[captions.length - 1];
+
+  return (
+    <main className="min-h-screen bg-gray-950 text-white flex flex-col">
+      {/* Header */}
+      <header className="sticky top-0 z-10 bg-gray-950/90 backdrop-blur-md border-b border-gray-800/50 px-5 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Link href="/" className="text-gray-500 hover:text-white transition-colors text-sm">
+            ←
+          </Link>
+          <span className="text-lg">🇺🇦</span>
+          <div>
+            <h1 className="font-semibold text-sm tracking-tight">Ukrainian</h1>
+            <p className="text-[10px] text-gray-500">Live translation</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span
+            className={`w-2 h-2 rounded-full ${connected ? "bg-green-400" : "bg-yellow-400 animate-pulse"}`}
+          />
+          <span className="text-xs text-gray-400">
+            {connected ? "Live" : "Connecting…"}
+          </span>
+        </div>
+      </header>
+
+      {/* Captions feed */}
+      <div className="flex-1 overflow-y-auto px-5 py-5">
+        {captions.length === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center text-center gap-4 py-32">
+            <div className="text-6xl opacity-40">🕊️</div>
+            <div>
+              <p className="text-gray-400 text-lg font-light">
+                Waiting for the service to begin…
+              </p>
+              <p className="text-gray-600 text-sm mt-2">
+                Captions will appear here in Ukrainian
+              </p>
+            </div>
+            {connected && (
+              <div className="flex items-center gap-2 mt-4 text-green-400/70">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                <span className="text-xs">Connected — ready to receive</span>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {/* Previous captions — smaller, faded */}
+            {captions.slice(0, -1).map((c) => (
+              <p
+                key={c.ts}
+                className="text-lg leading-relaxed text-gray-400 font-light"
+              >
+                {c.text}
+              </p>
+            ))}
+
+            {/* Latest caption — prominent */}
+            {latestCaption && (
+              <p className="text-2xl leading-relaxed text-white font-normal animate-in fade-in duration-300">
+                {latestCaption.text}
+              </p>
+            )}
+
+            <div ref={bottomRef} />
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <footer className="px-5 py-3 border-t border-gray-800/50">
+        <div className="flex items-center justify-between">
+          <p className="text-gray-600 text-[10px]">
+            {captions.length > 0
+              ? `${captions.length} line${captions.length !== 1 ? "s" : ""} received`
+              : "Keep this screen open"}
+          </p>
+          <p className="text-gray-700 text-[10px]">⛪ Church Translator</p>
+        </div>
+      </footer>
+    </main>
+  );
+}
+</file>
+
+<file path="app/globals.css">
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+</file>
+
+<file path="app/layout.tsx">
+import type { Metadata, Viewport } from "next";
+import { Geist, Geist_Mono } from "next/font/google";
+import "./globals.css";
+
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+});
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
+
+export const metadata: Metadata = {
+  title: "Church Translator",
+  description: "Live English to Ukrainian sermon translation",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Translator",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#030712",
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+};
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html
+      lang="en"
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+    >
+      <body className="min-h-full flex flex-col">{children}</body>
+    </html>
+  );
+}
+</file>
+
+<file path="app/manifest.ts">
+import type { MetadataRoute } from "next";
+
+export default function manifest(): MetadataRoute.Manifest {
+  return {
+    name: "Church Translator",
+    short_name: "Translator",
+    description: "Live English to Ukrainian sermon translation",
+    start_url: "/listen",
+    display: "standalone",
+    background_color: "#030712",
+    theme_color: "#030712",
+    icons: [
+      {
+        src: "/icon-192.png",
+        sizes: "192x192",
+        type: "image/png",
+      },
+      {
+        src: "/icon-512.png",
+        sizes: "512x512",
+        type: "image/png",
+      },
+    ],
+  };
+}
+</file>
+
+<file path="app/page.tsx">
+import Link from "next/link";
+
+export default function Home() {
+  return (
+    <main className="min-h-screen bg-gray-950 text-white flex flex-col items-center justify-center p-6">
+      <div className="max-w-sm w-full text-center space-y-10">
+        {/* Logo area */}
+        <div className="space-y-4">
+          <div className="w-20 h-20 rounded-2xl bg-blue-600/10 border border-blue-500/20 flex items-center justify-center text-4xl mx-auto">
+            ⛪
+          </div>
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">
+              Church Translator
+            </h1>
+            <p className="text-gray-400 text-sm mt-2">
+              Live sermon translation — English to Ukrainian
+            </p>
+          </div>
+        </div>
+
+        {/* Role selection */}
+        <div className="grid gap-3">
+          <Link
+            href="/broadcast"
+            className="group block rounded-2xl bg-blue-600 hover:bg-blue-500 active:bg-blue-700 transition-all p-5 text-left shadow-lg shadow-blue-600/10"
+          >
+            <div className="flex items-start gap-4">
+              <div className="text-2xl mt-0.5">🎙️</div>
+              <div>
+                <div className="font-semibold text-lg">Preacher</div>
+                <div className="text-blue-200 text-sm mt-0.5 leading-relaxed">
+                  Start broadcasting your sermon with live translation
+                </div>
+              </div>
+            </div>
+          </Link>
+
+          <Link
+            href="/listen"
+            className="group block rounded-2xl bg-gray-900 hover:bg-gray-800 active:bg-gray-850 transition-all p-5 text-left border border-gray-800 hover:border-gray-700"
+          >
+            <div className="flex items-start gap-4">
+              <div className="text-2xl mt-0.5">🇺🇦</div>
+              <div>
+                <div className="font-semibold text-lg">Listener</div>
+                <div className="text-gray-400 text-sm mt-0.5 leading-relaxed">
+                  Follow the sermon in Ukrainian on your phone
+                </div>
+              </div>
+            </div>
+          </Link>
+        </div>
+
+        <p className="text-gray-700 text-xs">
+          The preacher shows a QR code — scan it to start listening
+        </p>
+      </div>
+    </main>
+  );
+}
+</file>
+
+<file path="lib/broadcast-store.ts">
+// In-memory store for SSE subscribers.
+// Works perfectly for a single church session (one server instance).
+// For multi-region Vercel deploy, swap with Upstash Redis pub/sub later.
+
+type Handler = (text: string) => void;
+
+const handlers = new Set<Handler>();
+
+export const broadcastStore = {
+  subscribe(fn: Handler) {
+    handlers.add(fn);
+  },
+  unsubscribe(fn: Handler) {
+    handlers.delete(fn);
+  },
+  broadcast(text: string) {
+    handlers.forEach((fn) => fn(text));
+  },
+  get listenerCount() {
+    return handlers.size;
+  },
+};
+</file>
+
+<file path="public/file.svg">
+<svg fill="none" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M14.5 13.5V5.41a1 1 0 0 0-.3-.7L9.8.29A1 1 0 0 0 9.08 0H1.5v13.5A2.5 2.5 0 0 0 4 16h8a2.5 2.5 0 0 0 2.5-2.5m-1.5 0v-7H8v-5H3v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1M9.5 5V2.12L12.38 5zM5.13 5h-.62v1.25h2.12V5zm-.62 3h7.12v1.25H4.5zm.62 3h-.62v1.25h7.12V11z" clip-rule="evenodd" fill="#666" fill-rule="evenodd"/></svg>
+</file>
+
+<file path="public/globe.svg">
+<svg fill="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><g clip-path="url(#a)"><path fill-rule="evenodd" clip-rule="evenodd" d="M10.27 14.1a6.5 6.5 0 0 0 3.67-3.45q-1.24.21-2.7.34-.31 1.83-.97 3.1M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16m.48-1.52a7 7 0 0 1-.96 0H7.5a4 4 0 0 1-.84-1.32q-.38-.89-.63-2.08a40 40 0 0 0 3.92 0q-.25 1.2-.63 2.08a4 4 0 0 1-.84 1.31zm2.94-4.76q1.66-.15 2.95-.43a7 7 0 0 0 0-2.58q-1.3-.27-2.95-.43a18 18 0 0 1 0 3.44m-1.27-3.54a17 17 0 0 1 0 3.64 39 39 0 0 1-4.3 0 17 17 0 0 1 0-3.64 39 39 0 0 1 4.3 0m1.1-1.17q1.45.13 2.69.34a6.5 6.5 0 0 0-3.67-3.44q.65 1.26.98 3.1M8.48 1.5l.01.02q.41.37.84 1.31.38.89.63 2.08a40 40 0 0 0-3.92 0q.25-1.2.63-2.08a4 4 0 0 1 .85-1.32 7 7 0 0 1 .96 0m-2.75.4a6.5 6.5 0 0 0-3.67 3.44 29 29 0 0 1 2.7-.34q.31-1.83.97-3.1M4.58 6.28q-1.66.16-2.95.43a7 7 0 0 0 0 2.58q1.3.27 2.95.43a18 18 0 0 1 0-3.44m.17 4.71q-1.45-.12-2.69-.34a6.5 6.5 0 0 0 3.67 3.44q-.65-1.27-.98-3.1" fill="#666"/></g><defs><clipPath id="a"><path fill="#fff" d="M0 0h16v16H0z"/></clipPath></defs></svg>
+</file>
+
+<file path="public/next.svg">
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 394 80"><path fill="#000" d="M262 0h68.5v12.7h-27.2v66.6h-13.6V12.7H262V0ZM149 0v12.7H94v20.4h44.3v12.6H94v21h55v12.6H80.5V0h68.7zm34.3 0h-17.8l63.8 79.4h17.9l-32-39.7 32-39.6h-17.9l-23 28.6-23-28.6zm18.3 56.7-9-11-27.1 33.7h17.8l18.3-22.7z"/><path fill="#000" d="M81 79.3 17 0H0v79.3h13.6V17l50.2 62.3H81Zm252.6-.4c-1 0-1.8-.4-2.5-1s-1.1-1.6-1.1-2.6.3-1.8 1-2.5 1.6-1 2.6-1 1.8.3 2.5 1a3.4 3.4 0 0 1 .6 4.3 3.7 3.7 0 0 1-3 1.8zm23.2-33.5h6v23.3c0 2.1-.4 4-1.3 5.5a9.1 9.1 0 0 1-3.8 3.5c-1.6.8-3.5 1.3-5.7 1.3-2 0-3.7-.4-5.3-1s-2.8-1.8-3.7-3.2c-.9-1.3-1.4-3-1.4-5h6c.1.8.3 1.6.7 2.2s1 1.2 1.6 1.5c.7.4 1.5.5 2.4.5 1 0 1.8-.2 2.4-.6a4 4 0 0 0 1.6-1.8c.3-.8.5-1.8.5-3V45.5zm30.9 9.1a4.4 4.4 0 0 0-2-3.3 7.5 7.5 0 0 0-4.3-1.1c-1.3 0-2.4.2-3.3.5-.9.4-1.6 1-2 1.6a3.5 3.5 0 0 0-.3 4c.3.5.7.9 1.3 1.2l1.8 1 2 .5 3.2.8c1.3.3 2.5.7 3.7 1.2a13 13 0 0 1 3.2 1.8 8.1 8.1 0 0 1 3 6.5c0 2-.5 3.7-1.5 5.1a10 10 0 0 1-4.4 3.5c-1.8.8-4.1 1.2-6.8 1.2-2.6 0-4.9-.4-6.8-1.2-2-.8-3.4-2-4.5-3.5a10 10 0 0 1-1.7-5.6h6a5 5 0 0 0 3.5 4.6c1 .4 2.2.6 3.4.6 1.3 0 2.5-.2 3.5-.6 1-.4 1.8-1 2.4-1.7a4 4 0 0 0 .8-2.4c0-.9-.2-1.6-.7-2.2a11 11 0 0 0-2.1-1.4l-3.2-1-3.8-1c-2.8-.7-5-1.7-6.6-3.2a7.2 7.2 0 0 1-2.4-5.7 8 8 0 0 1 1.7-5 10 10 0 0 1 4.3-3.5c2-.8 4-1.2 6.4-1.2 2.3 0 4.4.4 6.2 1.2 1.8.8 3.2 2 4.3 3.4 1 1.4 1.5 3 1.5 5h-5.8z"/></svg>
+</file>
+
+<file path="public/vercel.svg">
+<svg fill="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1155 1000"><path d="m577.3 0 577.4 1000H0z" fill="#fff"/></svg>
+</file>
+
+<file path="public/window.svg">
+<svg fill="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill-rule="evenodd" clip-rule="evenodd" d="M1.5 2.5h13v10a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1zM0 1h16v11.5a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 0 12.5zm3.75 4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5M7 4.75a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0m1.75.75a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5" fill="#666"/></svg>
+</file>
+
+<file path=".gitignore">
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+</file>
+
+<file path="AGENTS.md">
+<!-- BEGIN:nextjs-agent-rules -->
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
+<!-- END:nextjs-agent-rules -->
+</file>
+
+<file path="CLAUDE.md">
+@AGENTS.md
+</file>
+
+<file path="eslint.config.mjs">
+import { defineConfig, globalIgnores } from "eslint/config";
+import nextVitals from "eslint-config-next/core-web-vitals";
+import nextTs from "eslint-config-next/typescript";
+
+const eslintConfig = defineConfig([
+  ...nextVitals,
+  ...nextTs,
+  // Override default ignores of eslint-config-next.
+  globalIgnores([
+    // Default ignores of eslint-config-next:
+    ".next/**",
+    "out/**",
+    "build/**",
+    "next-env.d.ts",
+  ]),
+]);
+
+export default eslintConfig;
+</file>
+
+<file path="next.config.ts">
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  allowedDevOrigins: ["192.168.5.40"],
+};
+
+export default nextConfig;
+</file>
+
+<file path="package.json">
+{
+  "name": "church-translator",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 0.0.0.0",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.64",
+    "@ai-sdk/openai": "^3.0.48",
+    "ai": "^6.0.138",
+    "next": "16.2.1",
+    "qrcode.react": "^4.2.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/dom-speech-recognition": "^0.0.8",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.1",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
+</file>
+
+<file path="postcss.config.mjs">
+const config = {
+  plugins: {
+    "@tailwindcss/postcss": {},
+  },
+};
+
+export default config;
+</file>
+
+<file path="README.md">
+# ⛪ Church Translator
+
+A live sermon translation web app — the preacher speaks in English and Ukrainian listeners see real-time captions on their phones.
+
+Built with Next.js 16, the Vercel AI SDK, and Claude Haiku.
+
+**Live demo:** [translator-tau-nine.vercel.app](https://translator-tau-nine.vercel.app)
+
+---
+
+## How It Works
+
+1. The **preacher** opens the app, shows the QR code to the congregation, and taps **Start Sermon**
+2. The browser's Web Speech API captures speech continuously
+3. Each completed sentence is sent to an AI translation API (Claude Haiku)
+4. The Ukrainian translation is pushed instantly to all connected listeners via **Server-Sent Events (SSE)**
+5. **Listeners** scan the QR code, open the `/listen` page, and read captions in Ukrainian as the sermon unfolds
+
+No app install required — it runs entirely in the browser.
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Framework | Next.js 16 (App Router) |
+| Language | TypeScript |
+| Styling | Tailwind CSS v4 |
+| AI Translation | Vercel AI SDK + Anthropic Claude Haiku |
+| Speech Recognition | Web Speech API (browser-native) |
+| Real-time delivery | Server-Sent Events (SSE) |
+| QR Code | `qrcode.react` |
+| Screen wake lock | Wake Lock API (keeps phone screen on) |
+
+---
+
+## Getting Started
+
+### 1. Clone and install
+
+```bash
+git clone <your-repo-url>
+cd church-translator
+npm install
+```
+
+### 2. Set up your API key
+
+Create a `.env.local` file in the project root:
+
+```
+ANTHROPIC_API_KEY=your_api_key_here
+```
+
+Get a key at [console.anthropic.com](https://console.anthropic.com).
+
+### 3. Run the dev server
+
+```bash
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000).
+
+---
+
+## Usage
+
+### Preacher flow
+1. Go to `/broadcast`
+2. Show the QR code to the congregation (it links them to your local IP)
+3. Tap **Start Sermon** and speak naturally in English
+4. The app listens, translates each sentence, and broadcasts it automatically
+
+### Listener flow
+1. Scan the QR code from the preacher's screen (or navigate to `/listen`)
+2. Captions appear automatically as the preacher speaks
+3. The latest sentence is displayed prominently; previous lines fade above it
+
+---
+
+## Architecture Notes
+
+- **Translation** — `POST /api/translate` receives a sentence, calls Claude Haiku, and returns the Ukrainian text. It also pushes the result to all SSE subscribers.
+- **Streaming** — `GET /api/stream` keeps a long-lived SSE connection open per listener. An in-memory pub/sub store (`lib/broadcast-store.ts`) fans out messages.
+- **QR Code** — `GET /api/network-info` returns the server's local IP so the QR code points to the correct address on the local network.
+- **Wake Lock** — Both the preacher and listener pages request a screen wake lock so phones don't sleep mid-service.
+
+> **Note:** The in-memory broadcast store works perfectly for a single-server setup (local network use). For a cloud deployment with multiple instances, replace it with a Redis pub/sub layer (e.g. Upstash).
+
+---
+
+## Project Structure
+
+```
+app/
+  page.tsx              # Home — role selection (Preacher / Listener)
+  broadcast/page.tsx    # Preacher UI — speech recognition + QR code
+  listen/page.tsx       # Listener UI — real-time Ukrainian captions
+  api/
+    translate/route.ts  # AI translation endpoint
+    stream/route.ts     # SSE endpoint for listeners
+    network-info/route.ts # Returns local IP for QR code
+lib/
+  broadcast-store.ts    # In-memory pub/sub for SSE fan-out
+```
+
+---
+
+## Deployment
+
+The app is deployed on [Vercel](https://vercel.com):
+
+**Production URL:** [translator-tau-nine.vercel.app](https://translator-tau-nine.vercel.app)
+
+### Deploy your own
+
+1. Fork this repo
+2. Import the project on [vercel.com/new](https://vercel.com/new)
+3. Add `ANTHROPIC_API_KEY` as an environment variable in the Vercel dashboard
+4. Deploy — Vercel auto-detects Next.js and handles the rest
+
+### Local network mode
+
+For live use during a church service, run the app locally on a laptop connected to the same Wi-Fi as the congregation:
+
+```bash
+npm run dev
+```
+
+The preacher's screen shows a QR code pointing to the local IP so attendees can connect directly.
+
+> **Note:** The SSE broadcast store is in-memory, which works perfectly for a single-server setup. On serverless platforms, the preacher and listeners may hit different function instances. For a scalable cloud deployment, swap `lib/broadcast-store.ts` for an Upstash Redis pub/sub adapter.
+</file>
+
+<file path="tsconfig.json">
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts",
+    "**/*.mts"
+  ],
+  "exclude": ["node_modules"]
+}
+</file>
+
+</files>

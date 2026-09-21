@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Church Translator">
+  <rect width="512" height="512" rx="112" fill="#030712"/>
+  <rect x="96" y="150" width="320" height="180" rx="28" fill="#1d4ed8"/>
+  <rect x="136" y="200" width="240" height="20" rx="10" fill="#bfdbfe"/>
+  <rect x="136" y="244" width="176" height="20" rx="10" fill="#bfdbfe" opacity="0.7"/>
+  <path d="M256 330 L232 382 L280 382 Z" fill="#1d4ed8"/>
+  <rect x="244" y="76" width="24" height="64" rx="8" fill="#e5e7eb"/>
+  <rect x="220" y="96" width="72" height="24" rx="8" fill="#e5e7eb"/>
+</svg>
