@@ -123,10 +123,16 @@ body {
    being generated: the listener's browser has no way to know that, and an
    indicator that lies is worse than none. */
 
-.verba-spin {
-  transform-origin: center;
-  will-change: transform;
-  animation: verba-spin 1.15s linear infinite;
+/* A bordered div rather than an SVG: CSS transforms on SVG elements have
+   real transform-origin/transform-box quirks on older iOS, and this has
+   none of them. */
+.verba-ring {
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  border: 2.5px solid currentColor;
+  border-top-color: transparent;
+  animation: verba-spin 1.05s linear infinite;
 }
 
 @keyframes verba-spin {
@@ -135,8 +141,10 @@ body {
   }
 }
 
+/* Hidden, not frozen. A stopped spinner reads as a broken app rather than as
+   a deliberate choice, and the header already says whether the feed is live. */
 @media (prefers-reduced-motion: reduce) {
-  .verba-spin {
-    animation: none;
+  .verba-ring {
+    display: none;
   }
 }

@@ -455,33 +455,7 @@ export default function ListenPage() {
                 never sits under a finished service. */}
             {live && (
               <div className="flex items-center gap-2 pt-3 text-gray-600">
-                <svg
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  className="verba-spin"
-                  aria-hidden
-                >
-                  <circle
-                    cx="12"
-                    cy="12"
-                    r="9"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeOpacity="0.25"
-                    strokeWidth="2.5"
-                  />
-                  <circle
-                    cx="12"
-                    cy="12"
-                    r="9"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    strokeDasharray="30 60"
-                  />
-                </svg>
+                <div className="verba-ring" aria-hidden />
                 <span className="sr-only">Waiting for the next line</span>
               </div>
             )}
