@@ -9,6 +9,7 @@ import {
 } from "react";
 import { QRCodeCanvas } from "qrcode.react";
 import Link from "next/link";
+import { Intro } from "../intro";
 import { LANGUAGES, DEFAULT_LANGUAGE, getLanguage } from "@/lib/languages";
 
 type Status = "idle" | "live" | "error";
@@ -415,6 +416,10 @@ export default function BroadcastPage() {
   if (status === "idle") {
     return (
       <main className="min-h-dvh bg-gray-950 text-white flex flex-col items-center justify-center p-6">
+        {/* Only before the first sermon of this page session — otherwise it
+            would replay over the preacher every time they press End Sermon. */}
+        {sentenceCount === 0 && <Intro />}
+
         <div className="max-w-sm w-full space-y-7 text-center">
           <Link
             href="/"

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
+import { Intro } from "../intro";
 import { DEFAULT_LANGUAGE, LANGUAGES, getLanguage } from "@/lib/languages";
 
 type Caption = { seq: number; text: string; ts: number };
@@ -304,6 +305,8 @@ export default function ListenPage() {
 
   return (
     <main className="h-dvh bg-gray-950 text-white flex flex-col">
+      <Intro />
+
       <header className="shrink-0 z-20 bg-gray-950/80 backdrop-blur-md border-b border-gray-800/50 px-5 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Link
