@@ -2,8 +2,8 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Church Translator",
-    short_name: "Translator",
+    name: "Verba",
+    short_name: "Verba",
     description: "Live sermon translation — listeners read in their own language",
     start_url: "/listen",
     display: "standalone",

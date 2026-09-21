@@ -259,7 +259,17 @@ export default function ListenPage() {
   };
 
   useEffect(() => {
-    if (autoScroll) bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (!autoScroll) return;
+
+    const el = feedRef.current;
+    if (!el) return;
+
+    // Set scrollTop directly rather than a smooth scrollIntoView. A smooth
+    // scroll fires scroll events the whole way down, and each one ran the
+    // handler above — which saw a large distance-from-bottom mid-flight and
+    // switched auto-scroll off, leaving the history parked at the top with a
+    // "Jump to latest" button on a feed that had just opened.
+    el.scrollTop = el.scrollHeight;
   }, [captions, autoScroll]);
 
   const language = getLanguage(lang);
@@ -360,11 +370,12 @@ export default function ListenPage() {
         </div>
       </header>
 
-      <div
-        ref={feedRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-6 py-6 overscroll-contain"
-      >
+      <div className="relative flex-1 min-h-0">
+        <div
+          ref={feedRef}
+          onScroll={handleScroll}
+          className="h-full overflow-y-auto px-6 py-6 overscroll-contain"
+        >
         {captions.length === 0 ? (
           <div className="mx-auto h-full max-w-2xl flex flex-col items-center justify-center text-center gap-4">
             <div className="text-6xl opacity-40" aria-hidden>
@@ -405,30 +416,77 @@ export default function ListenPage() {
               </p>
             ))}
 
-            {latest && (
-              <p
-                key={latest.seq}
-                className={`${size.latest} leading-relaxed text-white font-medium animate-in fade-in duration-300`}
-              >
-                {latest.text}
-              </p>
-            )}
-
             <div ref={bottomRef} />
+          </div>
+        )}
+        </div>
+
+        {/* Anchored to the bottom of the scrolling history, so it can never
+            sit on top of the pinned latest line. */}
+        {!autoScroll && captions.length > 1 && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
+            <button
+              onClick={() => {
+                setAutoScroll(true);
+                bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+              }}
+              className="pointer-events-auto px-5 py-2.5 rounded-full bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium shadow-xl shadow-black/50 transition-all active:scale-95 animate-in fade-in slide-in-from-bottom-2"
+            >
+              ↓ Jump to latest
+            </button>
           </div>
         )}
       </div>
 
-      {!autoScroll && captions.length > 0 && (
-        <button
-          onClick={() => {
-            setAutoScroll(true);
-            bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-          }}
-          className="mx-auto mb-6 px-5 py-2.5 rounded-full bg-blue-600 hover:bg-blue-500 text-sm font-medium shadow-lg shadow-blue-600/30 transition-colors"
-        >
-          ↓ Jump to latest
-        </button>
+      {/* The newest line lives OUTSIDE the scrolling area, so it is always on
+          screen — scrolling back through earlier lines, or a short viewport,
+          can never hide the sentence being spoken right now. */}
+      {latest && (
+        <div className="shrink-0 border-t border-gray-800/50 bg-gray-950 px-6 py-4">
+          <div className="mx-auto w-full max-w-2xl max-h-[42vh] overflow-y-auto">
+            <p
+              key={latest.seq}
+              className={`${size.latest} leading-relaxed text-white font-medium animate-in fade-in duration-300`}
+            >
+              {latest.text}
+            </p>
+
+            {/* Only while the sermon is actually running, so a still circle
+                never sits under a finished service. */}
+            {live && (
+              <div className="flex items-center gap-2 pt-3 text-gray-600">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  className="verba-spin"
+                  aria-hidden
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="9"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeOpacity="0.25"
+                    strokeWidth="2.5"
+                  />
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="9"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeDasharray="30 60"
+                  />
+                </svg>
+                <span className="sr-only">Waiting for the next line</span>
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {hasEnded && (
@@ -447,7 +505,7 @@ export default function ListenPage() {
           <p className="text-gray-500 text-xs">
             {hasEnded ? "Thank you for joining us" : "Keep this screen open"}
           </p>
-          <p className="text-gray-600 text-xs">⛪ Church Translator</p>
+          <p className="text-gray-600 text-xs">Verba</p>
         </div>
       </footer>
     </main>

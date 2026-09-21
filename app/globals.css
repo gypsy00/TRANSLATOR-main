@@ -24,3 +24,119 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* ── Verba intro ──────────────────────────────────────────────────────────
+   A short title sequence on the landing page only. Deliberately CSS rather
+   than a video: nothing to download, nothing to buffer, and it cannot fail
+   to load on a bad church wifi connection.
+
+   It is purely decorative — pointer-events are off throughout, so it never
+   blocks a tap, and it is skipped entirely for anyone who prefers reduced
+   motion. */
+
+.verba-intro {
+  pointer-events: none;
+  animation: verba-intro-out 0.55s ease 2.45s forwards;
+}
+
+@keyframes verba-intro-out {
+  to {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+/* transform + opacity only — both composited, so the GPU animates them
+   without touching the main thread. An earlier version animated
+   `filter: blur()`, which repaints every frame; harmless on small text but
+   janky once the wordmark grew to 72-128px. */
+.verba-letter {
+  display: inline-block;
+  opacity: 0;
+  will-change: transform, opacity;
+  animation: verba-letter-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes verba-letter-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 0.4em, 0) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+/* Each rendering of "word" fades through in turn — the product described in
+   two seconds, rather than a logo that merely sits there. */
+/* Visible window (~0.17s) is deliberately SHORTER than the 0.28s gap between
+   words. When it was longer, three renderings overlapped on screen at once and
+   the effect read as blur rather than as a sequence. */
+.verba-word {
+  opacity: 0;
+  will-change: transform, opacity;
+  animation: verba-word-cycle 0.58s ease forwards;
+}
+
+@keyframes verba-word-cycle {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+  }
+  30% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+  60% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(0, -6px, 0);
+  }
+}
+
+.verba-rule {
+  transform: scaleX(0);
+  transform-origin: center;
+  will-change: transform;
+  animation: verba-rule-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.45s forwards;
+}
+
+@keyframes verba-rule-in {
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .verba-intro {
+    display: none;
+  }
+}
+
+/* ── Waiting indicator (listener) ─────────────────────────────────────────
+   An indeterminate circular arc shown while a sermon is live, meaning "the
+   next line is coming". It deliberately does NOT claim a translation is
+   being generated: the listener's browser has no way to know that, and an
+   indicator that lies is worse than none. */
+
+.verba-spin {
+  transform-origin: center;
+  will-change: transform;
+  animation: verba-spin 1.15s linear infinite;
+}
+
+@keyframes verba-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .verba-spin {
+    animation: none;
+  }
+}

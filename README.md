@@ -1,4 +1,7 @@
-# ⛪ Church Translator
+# Verba
+
+*verba* — Latin for "words"; **верба** in Ukrainian, Polish and Russian is the
+willow, as in Вербна неділя, Willow Sunday — Palm Sunday in the Slavic church.
 
 A live sermon translation web app — the preacher speaks in English and Ukrainian
 listeners read real-time captions on their phones.

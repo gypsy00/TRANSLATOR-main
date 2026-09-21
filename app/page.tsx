@@ -1,22 +1,69 @@
 import Link from "next/link";
 
+/**
+ * "Word" in the languages Verba speaks.
+ *
+ * 道 is how John 1:1 renders "the Word" in Chinese — 太初有道 — which is a
+ * closer parallel to the Latin Verbum than a literal translation would be.
+ */
+const WORD_IN = [
+  "Word",
+  "Слово",
+  "Słowo",
+  "Palavra",
+  "كلمة",
+  "道",
+];
+
+function Intro() {
+  return (
+    <div
+      aria-hidden
+      className="verba-intro fixed inset-0 z-50 flex flex-col items-center justify-center bg-gray-950"
+    >
+      <h1 className="text-7xl sm:text-8xl md:text-9xl font-semibold tracking-tight text-white">
+        {"Verba".split("").map((letter, i) => (
+          <span
+            key={i}
+            className="verba-letter"
+            style={{ animationDelay: `${i * 0.07}s` }}
+          >
+            {letter}
+          </span>
+        ))}
+      </h1>
+
+      <div className="verba-rule mt-6 h-px w-40 sm:w-56 bg-gradient-to-r from-transparent via-blue-500 to-transparent" />
+
+      {/* Stacked, so each fades through in the same place. */}
+      <div className="relative mt-7 h-10 w-full max-w-md">
+        {WORD_IN.map((word, i) => (
+          <span
+            key={word}
+            className="verba-word absolute inset-0 flex items-center justify-center text-2xl sm:text-3xl text-gray-400"
+            style={{ animationDelay: `${0.45 + i * 0.28}s` }}
+          >
+            {word}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   return (
     <main className="min-h-screen bg-gray-950 text-white flex flex-col items-center justify-center p-6">
+      <Intro />
+
       <div className="max-w-sm w-full text-center space-y-10">
-        {/* Logo area */}
-        <div className="space-y-4">
-          <div className="w-20 h-20 rounded-2xl bg-blue-600/10 border border-blue-500/20 flex items-center justify-center text-4xl mx-auto">
-            ⛪
-          </div>
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">
-              Church Translator
-            </h1>
-            <p className="text-gray-400 text-sm mt-2">
-              Live sermon translation — in your language
-            </p>
-          </div>
+        {/* No icon: the intro sequence is the brand moment, and a second
+            emblem underneath it only competed with the wordmark. */}
+        <div>
+          <h1 className="text-6xl font-semibold tracking-tight">Verba</h1>
+          <p className="text-gray-400 text-base mt-3">
+            Live sermon translation — in your language
+          </p>
         </div>
 
         {/* Role selection — equal visual weight. These are two different

@@ -200,12 +200,21 @@ export default function BroadcastPage() {
           continue;
         }
 
+        // Nothing was broadcast: the output failed validation twice, so the
+        // preacher needs to know the congregation did not receive that line.
+        if (data.skipped) {
+          setWarning(
+            "That line didn't translate cleanly, so it was not sent. Please say it again.",
+          );
+          continue;
+        }
+
         setLastEnglish(text);
         setLastTranslation(data.translated);
         setSentenceCount((c) => c + 1);
         setWarning(
-          data.suspect
-            ? "That line may not have translated cleanly — worth repeating it."
+          data.partial
+            ? "Sent, but one language could not be translated."
             : "",
         );
       } catch {
@@ -605,18 +614,38 @@ export default function BroadcastPage() {
           </div>
         )}
 
-        {interimText && (
-          <div className="bg-gray-900/30 rounded-xl px-4 py-3 border border-gray-800/50 text-left">
-            <p className="text-xs text-gray-500 mb-1">Hearing…</p>
-            <p className="text-sm text-gray-300 italic">{interimText}</p>
-          </div>
-        )}
+        {/* One card for the whole capture->send cycle. Previously the card
+            vanished between the interim text clearing and a translation
+            arriving, so the panel collapsed and reappeared on every sentence. */}
+        {(interimText || translating || lastTranslation) && (
+          <div className="bg-gray-900/50 rounded-2xl px-4 py-3 border border-gray-800/80 text-left space-y-3 min-h-[76px]">
+            {interimText && (
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-blue-400 mb-1">
+                  Hearing now
+                </p>
+                <p className="text-sm text-gray-200 italic">{interimText}</p>
+              </div>
+            )}
 
-        {lastTranslation && !interimText && (
-          <div className="bg-gray-900/30 rounded-xl px-4 py-3 border border-gray-800/50 text-left">
-            <p className="text-xs text-gray-500 mb-1">Last sent</p>
-            <p className="text-xs text-gray-400 mb-2">{lastEnglish}</p>
-            <p className="text-sm text-blue-300">{lastTranslation}</p>
+            {translating && !interimText && (
+              <div className="flex items-center gap-2 text-xs text-amber-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+                <span>Sending to listeners…</span>
+              </div>
+            )}
+
+            {lastTranslation && !interimText && (
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-500 mb-1">
+                  Last sent
+                </p>
+                <p className="text-xs text-gray-400 mb-1.5">{lastEnglish}</p>
+                <p className="text-sm font-medium text-emerald-300">
+                  {lastTranslation}
+                </p>
+              </div>
+            )}
           </div>
         )}
 
